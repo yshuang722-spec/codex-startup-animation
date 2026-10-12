@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.IO;
 using System.Diagnostics;
 using System.Reflection;
@@ -26,6 +26,7 @@ class Boot : Window {
  [DllImport("user32.dll")] static extern IntPtr MonitorFromWindow(IntPtr h,uint flags);
  [DllImport("user32.dll",CharSet=CharSet.Auto)] static extern bool GetMonitorInfo(IntPtr h,ref MONITORINFO i);
  [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
+ [DllImport("user32.dll")] static extern bool IsWindow(IntPtr h);
  [DllImport("user32.dll")] static extern bool IsIconic(IntPtr h);
  [DllImport("user32.dll")] static extern bool IsZoomed(IntPtr h);
  [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr h,int n);
@@ -36,6 +37,7 @@ class Boot : Window {
  struct POINT { public int X,Y; }
  struct WINDOWPLACEMENT { public int Length,Flags,ShowCmd; public POINT MinPosition,MaxPosition; public RECT NormalPosition; }
  struct MONITORINFO { public int Size; public RECT Monitor,Work; public uint Flags; }
+ double transitionStart=-1,nextReadyProbe=0; bool readinessPending=false,handoffReady=false;
  string appId; bool appDiscoveryComplete=false,appFailureShown=false; RECT savedWindowBounds; bool hasSavedWindowBounds=false; WINDOWPLACEMENT savedPlacement; bool hasSavedPlacement=false; bool preparing=false,launchQueued=false,clientHidden=false,clientShown=false,savedMax=false; int restoreCmd=4; Stopwatch clock=new Stopwatch(); IntPtr client; string root,userData; double phase=-1,nextClientProbe=0; bool sized=false; bool arranging=false; double dpi=1; RECT lastOverlayBounds; uint lastClientDpi; string matchSummary="";
   Geometry logo; Typeface mono=new Typeface("Consolas"), sans=new Typeface("Segoe UI");
  static string log; static void Log(string s){File.AppendAllText(log,DateTime.Now.ToString("O")+" "+s+Environment.NewLine);}
@@ -69,6 +71,24 @@ class Boot : Window {
    Log("SHORTCUT ready path="+shortcutPath);
   }catch(Exception e){Log("SHORTCUT create error="+e.GetType().Name);}
   finally{try{if(shortcut!=null&&Marshal.IsComObject(shortcut))Marshal.ReleaseComObject(shortcut);}catch{}try{if(shell!=null&&Marshal.IsComObject(shell))Marshal.ReleaseComObject(shell);}catch{}}
+ }
+ bool ProbeHandoffReady(){
+  try{
+   string themeRoot=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),"Documents\\Codex\\2026-10-12\\windows-codex-github-codex-css-css\\outputs\\GreenRoom");
+   if(!File.Exists(Path.Combine(themeRoot,"state","theme-enabled")))return client!=IntPtr.Zero&&clock.Elapsed.TotalSeconds-phase>1;
+   string node=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),".cache\\codex-runtimes\\codex-primary-runtime\\dependencies\\node\\bin\\node.exe");
+   ProcessStartInfo info=new ProcessStartInfo(node,"\""+Path.Combine(themeRoot,"handoff-ready.mjs")+"\""){UseShellExecute=false,CreateNoWindow=true,WindowStyle=ProcessWindowStyle.Hidden};
+   using(Process process=Process.Start(info)){if(process==null)return false;if(!process.WaitForExit(4000))return false;return process.ExitCode==0;}
+  }catch{return false;}
+ }
+ static bool TryLaunchThemeClient(){
+  try{
+   string themeRoot=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),"Documents\\Codex\\2026-10-12\\windows-codex-github-codex-css-css\\outputs\\GreenRoom");
+   string enabled=Path.Combine(themeRoot,"state","theme-enabled"),launcher=Path.Combine(themeRoot,"GreenRoomLaunch.exe");
+   if(!File.Exists(enabled)||!File.Exists(launcher))return false;
+   Process.Start(new ProcessStartInfo(launcher){UseShellExecute=false,CreateNoWindow=true,WindowStyle=ProcessWindowStyle.Hidden,WorkingDirectory=themeRoot});
+   Log("APP activation through enabled theme launcher");return true;
+  }catch(Exception e){Log("THEME launch fallback="+e.GetType().Name);return false;}
  }
  static string DiscoverInstalledAppId(){
   const string script="$apps=@(Get-StartApps | Where-Object { $_.Name -match '(?i)Codex|ChatGPT' }); $item=$apps | Where-Object { $_.Name -match '(?i)Codex' } | Select-Object -First 1; if($null -eq $item){$item=$apps | Select-Object -First 1}; if($item){$item.AppID}";
@@ -105,7 +125,7 @@ class Boot : Window {
    CreateOrUpdateDesktopShortcut(root);
    if(!String.IsNullOrWhiteSpace(appId)){appDiscoveryComplete=true;Log("APP configured id="+appId);}
    Task.Factory.StartNew(()=>DiscoverInstalledAppId()).ContinueWith(task=>Dispatcher.BeginInvoke(new Action(()=>{string found=task.Status==TaskStatus.RanToCompletion?task.Result:null;if(!String.IsNullOrWhiteSpace(found)){appId=found;SaveConfiguredAppId(userData,found);Log("APP discovered id="+appId);}else if(String.IsNullOrWhiteSpace(appId)){appId=null;Log("APP discovery complete none");}appDiscoveryComplete=true;})),TaskScheduler.Default);
-   client=FindClient(); if(client!=IntPtr.Zero){ CaptureClientPlacement(); ShowWindow(client,0);clientHidden=true;Log("CLIENT held hidden="+client+" maximized="+savedMax+" showCmd="+(hasSavedPlacement?savedPlacement.ShowCmd:-1)+" "+matchSummary); }
+   client=FindClient(); if(client!=IntPtr.Zero){ CaptureClientPlacement(); Log("CLIENT retained for background rendering="+client+" maximized="+savedMax+" showCmd="+(hasSavedPlacement?savedPlacement.ShowCmd:-1)+" "+matchSummary); }
    RECT initialBounds,initialClient;uint initialDpi;bool known,maximized,touches;string mode;
    if(GetOverlayBounds(out initialBounds,out initialClient,out initialDpi,out known,out maximized,out touches,out mode))PlaceOverlay(initialBounds,initialDpi);
    clock.Start();
@@ -174,15 +194,27 @@ class Boot : Window {
  void Frame(object s,EventArgs e){
   if(arranging)return;
   double t=clock.Elapsed.TotalSeconds;
+  if(client!=IntPtr.Zero&&!IsWindow(client)){
+   Log("CLIENT previous window exited; waiting for themed replacement");
+   client=IntPtr.Zero;sized=false;clientShown=false;clientHidden=false;hasSavedPlacement=false;hasSavedWindowBounds=false;
+  }
   if(client==IntPtr.Zero&&preparing&&t>=nextClientProbe){nextClientProbe=t+.15;client=FindClient();}
   if(preparing)KeepOverlayAboveTaskbar(false);
   if(t>=5 && !sized){ if(!preparing){preparing=true;phase=t;KeepOverlayAboveTaskbar(true);Log("SCENE animation started");}
-   if(client==IntPtr.Zero){InvalidateVisual();if(t>20){Log("ERROR client window unavailable appId="+(appId??"none"));Close();if(!appFailureShown){appFailureShown=true;Dispatcher.BeginInvoke(new Action(()=>MessageBox.Show(String.IsNullOrWhiteSpace(appId)?"没有找到已安装的 Codex 或 ChatGPT 桌面客户端。请先安装客户端，然后重新运行桌面快捷方式。":"已启动 Codex / ChatGPT，但没有找到它的主窗口。请确认客户端可以正常打开后再试。","Codex 启动器",MessageBoxButton.OK,MessageBoxImage.Information)));}} return;}
+   if(!launchQueued&&(client!=IntPtr.Zero||appDiscoveryComplete)){
+    launchQueued=true;
+    Dispatcher.BeginInvoke(DispatcherPriority.ContextIdle,new Action(()=>{try{
+     Log("OPAQUE ready before activation; existingClient="+(client!=IntPtr.Zero));
+     if(!TryLaunchThemeClient()&&client==IntPtr.Zero&&!String.IsNullOrWhiteSpace(appId))
+      Process.Start(new ProcessStartInfo("explorer.exe","shell:AppsFolder\\"+appId){UseShellExecute=true});
+    }catch(Exception ex){Log("APP launch error="+ex.GetType().Name);}}));
+   }
+   if(client==IntPtr.Zero){InvalidateVisual();if(t>20){Log("ERROR client window unavailable appId="+(appId??"none"));Opacity=0;Hide();Close();if(!appFailureShown){appFailureShown=true;Dispatcher.BeginInvoke(new Action(()=>MessageBox.Show(String.IsNullOrWhiteSpace(appId)?"没有找到已安装的 Codex 或 ChatGPT 桌面客户端。请先安装客户端，然后重新运行桌面快捷方式。":"已启动 Codex / ChatGPT，但没有找到它的主窗口。请确认客户端可以正常打开后再试。","Codex 启动器",MessageBoxButton.OK,MessageBoxImage.Information)));}} return;}
    if(!clientHidden&&!clientShown)CaptureClientPlacement();
    if(IsIconic(client))ShowWindow(client,9);
    RECT r,windowBounds;uint clientDpi;bool monitorKnown,maximized,touchesMonitor;string mode;
    if(!GetOverlayBounds(out r,out windowBounds,out clientDpi,out monitorKnown,out maximized,out touchesMonitor,out mode))return;
-   if(!clientHidden&&!clientShown){ShowWindow(client,0);clientHidden=true;Log("CLIENT held hidden late="+client+" maximized="+savedMax+" showCmd="+(hasSavedPlacement?savedPlacement.ShowCmd:-1)+" "+matchSummary);}
+   Log("CLIENT visible behind opaque animation="+client);
    sized=true;if(!Near(r,lastOverlayBounds,0)||clientDpi!=lastClientDpi)PlaceOverlay(r,clientDpi);KeepOverlayAboveTaskbar(true);
    MONITORINFO monitor=new MONITORINFO();monitor.Size=Marshal.SizeOf(typeof(MONITORINFO));bool hasMonitor=GetMonitorInfo(MonitorFromWindow(client,2),ref monitor);
    Log("SCENE mode="+mode+" maximized="+maximized+" touchesMonitor="+touchesMonitor+" window="+(windowBounds.R-windowBounds.L)+"x"+(windowBounds.B-windowBounds.T)+" at="+windowBounds.L+","+windowBounds.T+" monitor="+(hasMonitor?(monitor.Monitor.R-monitor.Monitor.L)+"x"+(monitor.Monitor.B-monitor.Monitor.T):"unknown")+" overlay="+(r.R-r.L)+"x"+(r.B-r.T)+" dpi="+clientDpi+" client="+client);
@@ -191,8 +223,13 @@ class Boot : Window {
    RECT r,windowBounds;uint clientDpi;bool monitorKnown,maximized,touchesMonitor;string mode;
    if(GetOverlayBounds(out r,out windowBounds,out clientDpi,out monitorKnown,out maximized,out touchesMonitor,out mode)&&(!Near(r,lastOverlayBounds,2)||clientDpi!=lastClientDpi))PlaceOverlay(r,clientDpi);
   }
-   if(sized && t-phase>=SceneSeconds-.15)RevealClient();
-   if(sized && t-phase>=SceneSeconds+.33){SetForegroundWindow(client);Log("RETURN real-client="+client);Close();return;}
+   if(sized&&!handoffReady&&!readinessPending&&t>=nextReadyProbe){
+    nextReadyProbe=t+.5;readinessPending=true;
+    Task.Factory.StartNew(()=>ProbeHandoffReady()).ContinueWith(task=>Dispatcher.BeginInvoke(new Action(()=>{readinessPending=false;if(task.Status==TaskStatus.RanToCompletion&&task.Result){handoffReady=true;Log("HANDOFF renderer and theme ready");}})),TaskScheduler.Default);
+   }
+   if(sized&&transitionStart<0&&t-phase>=SceneSeconds&&handoffReady){transitionStart=t;RevealClient();Log("HANDOFF aperture starting after ready");}
+   if(transitionStart>=0&&t-transitionStart>=.33){SetForegroundWindow(client);Log("RETURN real-client="+client);Close();return;}
+   if(preparing&&transitionStart<0&&t-phase>20){Log("HANDOFF readiness fallback; revealing client instead of holding fullscreen");Opacity=0;Hide();RevealClient(true);Close();return;}
   InvalidateVisual();
  }
  void RevealClient(bool activate=false){
@@ -339,8 +376,8 @@ class Boot : Window {
  void Rect(DrawingContext d,double x,double y,double w,double h,Brush b){if(w>0&&h>0)d.DrawRectangle(b,null,new Rect(x,y,w,h));}
  protected override void OnRender(DrawingContext d){
   base.OnRender(d); double t=clock.Elapsed.TotalSeconds,w=ActualWidth,h=ActualHeight;
-  if(!sized){if(preparing){Scene(d,Math.Max(0,t-phase),w,h);if(client==IntPtr.Zero&&appDiscoveryComplete&&!String.IsNullOrWhiteSpace(appId)&&!launchQueued){launchQueued=true;Dispatcher.BeginInvoke(DispatcherPriority.ContextIdle,new Action(()=>{try{Log("OPAQUE ready before activation");Process.Start(new ProcessStartInfo("explorer.exe","shell:AppsFolder\\"+appId){UseShellExecute=true});}catch(Exception ex){Log("APP launch error="+ex.GetType().Name);}}));}}else Engine(d,Math.Min(t,5),w,h);return;}
-  double p=t-phase;
+  if(!sized){if(preparing)Scene(d,Math.Max(0,t-phase),w,h);else Engine(d,Math.Min(t,5),w,h);return;}
+  double p=transitionStart<0?Math.Min(t-phase,SceneSeconds-.001):SceneSeconds+t-transitionStart;
    if(p<SceneSeconds){Scene(d,p,w,h);return;}
    // Snap shut, hold a bright filament briefly, then snap the aperture open to the live app.
   double c=p-SceneSeconds; double half=h/2;
