@@ -117,6 +117,9 @@ class Boot : Window {
  Boot(string dir,string dataDir,string aumid){
   root=dir;userData=dataDir;appId=aumid;Title="GPT Engine Boot";WindowStyle=WindowStyle.None;ResizeMode=ResizeMode.NoResize;
   AllowsTransparency=true; Background=Brushes.Transparent; Topmost=true; ShowInTaskbar=false; ShowActivated=false;
+  UseLayoutRounding=true;
+  TextOptions.SetTextFormattingMode(this,TextFormattingMode.Display);
+  TextOptions.SetTextRenderingMode(this,TextRenderingMode.Grayscale);
   Left=SystemParameters.PrimaryScreenWidth/2-SystemParameters.PrimaryScreenWidth/2;
   Top=0; Width=SystemParameters.PrimaryScreenWidth; Height=SystemParameters.PrimaryScreenHeight;
    logo=LoadLogo(root);
@@ -182,8 +185,8 @@ class Boot : Window {
   return true;
  }
  void PlaceOverlay(RECT r,uint clientDpi){
-  if(clientDpi>0)dpi=clientDpi/96.0;
   arranging=true;try{SetWindowPos(new WindowInteropHelper(this).Handle,new IntPtr(-1),r.L,r.T,r.R-r.L,r.B-r.T,0x10);UpdateLayout();}finally{arranging=false;}
+  var source=PresentationSource.FromVisual(this);if(source!=null)dpi=source.CompositionTarget.TransformToDevice.M11;
   lastOverlayBounds=r;lastClientDpi=clientDpi;
  }
  void KeepOverlayAboveTaskbar(bool activate){
@@ -251,33 +254,37 @@ class Boot : Window {
  }
  Brush ColorB(byte r,byte g,byte b,double alpha){return new SolidColorBrush(Color.FromArgb((byte)(Math.Max(0,Math.Min(1,alpha))*255),r,g,b));}
  Brush green= new SolidColorBrush(Color.FromRgb(87,255,169));
+ double Pixel(double value){return Math.Round(value*dpi)/dpi;}
+ FormattedText FormatText(string text,Typeface type,double size,Brush color){
+  return new FormattedText(text,System.Globalization.CultureInfo.InvariantCulture,FlowDirection.LeftToRight,type,size,color,null,TextFormattingMode.Display,dpi);
+ }
  void Text(DrawingContext d,string s,double x,double y,double size,Brush b,bool code=false){
-  var f=new FormattedText(s,System.Globalization.CultureInfo.InvariantCulture,FlowDirection.LeftToRight,code?mono:sans,size,b,dpi); d.DrawText(f,new Point(x,y));
+  var f=FormatText(s,code?mono:sans,size,b); d.DrawText(f,new Point(Pixel(x),Pixel(y)));
  }
   void CenterText(DrawingContext d,string s,double cx,double y,double size,Brush b){
-   var f=new FormattedText(s,System.Globalization.CultureInfo.InvariantCulture,FlowDirection.LeftToRight,sans,size,b,dpi); d.DrawText(f,new Point(cx-f.Width/2,y));
+   var f=FormatText(s,sans,size,b); d.DrawText(f,new Point(Pixel(cx-f.Width/2),Pixel(y)));
   }
   void NeonText(DrawingContext d,string s,double cx,double y,double size){
-   var f=new FormattedText(s,System.Globalization.CultureInfo.InvariantCulture,FlowDirection.LeftToRight,sans,size,ColorB(101,255,151,1),dpi);
+   var f=FormatText(s,sans,size,ColorB(101,255,151,1));
    Geometry glyph=f.BuildGeometry(new Point(cx-f.Width/2,y));
    for(int k=5;k>=1;k--)d.DrawGeometry(null,new Pen(ColorB(34,255,104,.045),k*1.15),glyph);
    d.DrawGeometry(ColorB(130,255,170,1),null,glyph);
   }
   void CodexGlowText(DrawingContext d,string s,double x,double y,double size){
-   var f=new FormattedText(s,System.Globalization.CultureInfo.InvariantCulture,FlowDirection.LeftToRight,sans,size,ColorB(104,255,154,1),dpi);
+   var f=FormatText(s,sans,size,ColorB(104,255,154,1));
    Geometry glyph=f.BuildGeometry(new Point(x,y));
    for(int k=5;k>=1;k--)d.DrawGeometry(null,new Pen(ColorB(45,255,115,.052),k*1.35),glyph);
    d.DrawGeometry(ColorB(108,255,157,1),null,glyph);
   }
   void CodexGlowTextCentered(DrawingContext d,string s,double cx,double y,double size){
-   var f=new FormattedText(s,System.Globalization.CultureInfo.InvariantCulture,FlowDirection.LeftToRight,new Typeface("Microsoft YaHei UI"),size,ColorB(108,255,157,1),dpi);
+   var f=FormatText(s,new Typeface("Microsoft YaHei UI"),size,ColorB(108,255,157,1));
    Geometry glyph=f.BuildGeometry(new Point(cx-f.Width/2,y));
    for(int k=5;k>=1;k--)d.DrawGeometry(null,new Pen(ColorB(45,255,115,.052),k*1.35),glyph);
    d.DrawGeometry(ColorB(108,255,157,1),null,glyph);
   }
   void RefinedModelText(DrawingContext d,string s,double cx,double y,double size,Brush color,bool charged){
-   var f=new FormattedText(s,System.Globalization.CultureInfo.InvariantCulture,FlowDirection.LeftToRight,sans,size,color,dpi);
-   f.SetFontWeight(FontWeights.Medium,0,s.Length);Point origin=new Point(cx-f.Width/2,y);
+   var f=FormatText(s,sans,size,color);
+   f.SetFontWeight(FontWeights.Medium,0,s.Length);Point origin=new Point(Pixel(cx-f.Width/2),Pixel(y));
    if(charged){Geometry glyph=f.BuildGeometry(origin);for(int k=4;k>=1;k--)d.DrawGeometry(null,new Pen(ColorB(40,255,114,.045),k*.85),glyph);d.DrawGeometry(color,null,glyph);}
    else d.DrawText(f,origin);
   }
@@ -375,7 +382,7 @@ class Boot : Window {
   }
  void Rect(DrawingContext d,double x,double y,double w,double h,Brush b){if(w>0&&h>0)d.DrawRectangle(b,null,new Rect(x,y,w,h));}
  protected override void OnRender(DrawingContext d){
-  base.OnRender(d); double t=clock.Elapsed.TotalSeconds,w=ActualWidth,h=ActualHeight;
+  base.OnRender(d); var source=PresentationSource.FromVisual(this);if(source!=null)dpi=source.CompositionTarget.TransformToDevice.M11; double t=clock.Elapsed.TotalSeconds,w=ActualWidth,h=ActualHeight;
   if(!sized){if(preparing)Scene(d,Math.Max(0,t-phase),w,h);else Engine(d,Math.Min(t,5),w,h);return;}
   double p=transitionStart<0?Math.Min(t-phase,SceneSeconds-.001):SceneSeconds+t-transitionStart;
    if(p<SceneSeconds){Scene(d,p,w,h);return;}
@@ -498,7 +505,7 @@ class Boot : Window {
   Text(d,"GPT ENGINE / INTERFACE COMPILER",terminal+20,18,fs,green,true);
   d.PushClip(new RectangleGeometry(new Rect(terminal+16,48,w-terminal-24,h-110)));
   int rows=(int)Math.Ceiling((h-95)/line),generated=(int)(p*32);
-  FormattedText monoSample=new FormattedText("MMMMMMMMMMMMMMMM",System.Globalization.CultureInfo.InvariantCulture,FlowDirection.LeftToRight,mono,fs,green,dpi);
+  FormattedText monoSample=FormatText("MMMMMMMMMMMMMMMM",mono,fs,green);
   int maxCodeChars=Math.Max(32,(int)((w-terminal-52)/(monoSample.WidthIncludingTrailingWhitespace/16.0)));
   for(int i=0;i<Math.Min(rows,generated);i++){
    int n=Math.Max(0,generated-rows)+i;string sourceLine=TerminalLine(n);
@@ -520,8 +527,8 @@ class Boot : Window {
   if(p>2.5){
    SoftCard(d,inputX,inputY,inputW,inputH,ColorB(34,63,56,1),22);
     Text(d,"Message Codex  _",inputX+15,inputY+11,fs,ColorB(195,242,216,1));
-    string[] modelNames={"Codex-3","GPT-5.5","GPT-5.6 Luna","GPT-5.6 Terra","GPT-5.6 Sol","GPT-5.6 Turbo","GPT-6 Luna","GPT-6 Sol","GPT-6 Astra"};
-    string[] modelLevels={"轻度","轻度","中高","中高","极高","极高","极高","极高","Ultra"};
+    string[] modelNames={"GPT-5.6 Luna","GPT-5.6 Terra","GPT-5.6 Sol","GPT-6 Luna","GPT-6 Sol","GPT-6.1 Sol","GPT-6 Astra"};
+    string[] modelLevels={"轻度","中高","极高","极高","极高","极高","Ultra"};
    double selectorStart=2.5/ProgressCompleteAt;
    double selectorProgress=Math.Max(0,Math.Min(1,(progress-selectorStart)/(1-selectorStart)));
    bool charged=progress>=1;
@@ -569,7 +576,7 @@ class Boot : Window {
   FloatingCard(d,p,3.23+CardDelaySeconds,5.55+CardDelaySeconds,w*.75,h*.62,w*.22,h*.13,"NETWORK / RELAY","Secure relay active","Latency corridor clear","","LINK STABLE",ColorB(102,223,255,.94));
   FloatingCard(d,p,3.78+CardDelaySeconds,5.73+CardDelaySeconds,w*.33,h*.69,w*.25,h*.12,"UI / RENDERER","Interface layers built","Navigation and canvas linked","","RENDER READY",ColorB(155,255,154,.94));
   FloatingCard(d,p,4.33+CardDelaySeconds,5.91+CardDelaySeconds,w*.68,h*.20,w*.20,h*.15,"SAFETY / GUARDRAIL","Policy layer mounted","Response boundary loaded","","PROTECTION ON",ColorB(238,151,213,.94));
-  for(double y=0;y<h;y+=4)Rect(d,0,y,w,1,ColorB(0,0,0,.055));
+  for(double y=0;y<h;y+=4)Rect(d,0,Pixel(y),w,1/dpi,ColorB(0,0,0,.012));
   int progressPercent=(int)(progress*100);
   Text(d,p<ProgressCompleteAt?"COMPILING  "+Math.Min(99,progressPercent)+"%":"CORE ONLINE / INTERFACE READY",terminal+20,h-51,fs,green,true);
   double barHeight=Math.Max(3,h*.004),barY=h-barHeight-2,fillWidth=w*progress;
@@ -584,10 +591,10 @@ class Boot : Window {
    d.PushOpacity(titleAlpha);
    d.DrawRoundedRectangle(ColorB(1,13,15,.97),new Pen(ColorB(104,241,212,.92),1.5),new Rect(boxX,boxY,boxW,boxH),12,12);
    Rect(d,boxX+22,boxY+12,boxW-44,2,ColorB(93,255,210,.86));
-   Text(d,"SYSTEM READY TO LAUNCH",(w-titleWidth)/2,boxY+titleTop,titleSize,Brushes.White,true);
+   Text(d,"SYSTEM READY TO LAUNCH",(w-titleWidth)/2,boxY+titleTop,titleSize,green,true);
    double subWidth=24*12*.60;
    Text(d,"GPT INTERFACE  //  ONLINE",(w-subWidth)/2,boxY+subTop,12,ColorB(143,255,217,.96),true);
-   if(p>=6.56+CardDelaySeconds)Text(d,"> ENTER  ↵",(w-10*16*.60)/2,boxY+enterTop,16,ColorB(220,255,242,1),true);
+   if(p>=6.56+CardDelaySeconds)Text(d,"> ENTER  ↵",(w-10*16*.60)/2,boxY+enterTop,16,green,true);
    d.Pop();
   }
  }
