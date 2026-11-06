@@ -1,0 +1,29 @@
+name: Build Windows launcher
+
+on:
+  push:
+    branches:
+      - main
+      - "feat/**"
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Build launcher from source
+        shell: pwsh
+        run: ./build.ps1 -OutputDirectory dist -Zip
+
+      - name: Upload release files
+        uses: actions/upload-artifact@v4
+        with:
+          name: Codex-Startup-Animation
+          path: |
+            dist/ChatGPT-Boot.exe
+            Codex-Startup-Animation.zip
+          if-no-files-found: error

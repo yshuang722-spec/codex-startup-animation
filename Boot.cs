@@ -91,7 +91,7 @@ class Boot : Window {
   }catch(Exception e){Log("THEME launch fallback="+e.GetType().Name);return false;}
  }
  static string DiscoverInstalledAppId(){
-  const string script="$apps=@(Get-StartApps | Where-Object { $_.Name -match '(?i)Codex|ChatGPT' }); $item=$apps | Where-Object { $_.Name -match '(?i)Codex' } | Select-Object -First 1; if($null -eq $item){$item=$apps | Select-Object -First 1}; if($item){$item.AppID}";
+  const string script="$apps=@(Get-StartApps | Where-Object { $_.Name -match '(?i)Codex|ChatGPT' }); $item=$apps | Where-Object { $_.Name -match '(?i)Codex' } | Select-Object -First 1; if($null -eq $item){$item=$apps | Select-Object -First 1}; if($item){$item.AppID}else{$pkg=Get-AppxPackage OpenAI.Codex | Select-Object -First 1; if($pkg){$manifest=Get-AppxPackageManifest $pkg; $app=@($manifest.Package.Applications.Application) | Select-Object -First 1; if($app){$pkg.PackageFamilyName+'!'+$app.Id}}}";
   try{
    string encoded=Convert.ToBase64String(Encoding.Unicode.GetBytes(script));
    ProcessStartInfo info=new ProcessStartInfo("powershell.exe","-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand "+encoded);
@@ -127,7 +127,7 @@ class Boot : Window {
    Log("START screen="+Width+"x"+Height+" dpi="+dpi);
    CreateOrUpdateDesktopShortcut(root);
    if(!String.IsNullOrWhiteSpace(appId)){appDiscoveryComplete=true;Log("APP configured id="+appId);}
-   Task.Factory.StartNew(()=>DiscoverInstalledAppId()).ContinueWith(task=>Dispatcher.BeginInvoke(new Action(()=>{string found=task.Status==TaskStatus.RanToCompletion?task.Result:null;if(!String.IsNullOrWhiteSpace(found)){appId=found;SaveConfiguredAppId(userData,found);Log("APP discovered id="+appId);}else if(String.IsNullOrWhiteSpace(appId)){appId=null;Log("APP discovery complete none");}appDiscoveryComplete=true;})),TaskScheduler.Default);
+   Task.Factory.StartNew(()=>DiscoverInstalledAppId()).ContinueWith(task=>Dispatcher.BeginInvoke(new Action(()=>{string found=task.Status==TaskStatus.RanToCompletion?task.Result:null;if(!String.IsNullOrWhiteSpace(found)){appId=found;SaveConfiguredAppId(userData,found);Log("APP discovered id="+appId);}else if(String.IsNullOrWhiteSpace(appId)){appId="OpenAI.Codex_2p2nqsd0c76g0!App";SaveConfiguredAppId(userData,appId);Log("APP fallback id="+appId);}appDiscoveryComplete=true;})),TaskScheduler.Default);
    client=FindClient(); if(client!=IntPtr.Zero){ CaptureClientPlacement(); Log("CLIENT retained for background rendering="+client+" maximized="+savedMax+" showCmd="+(hasSavedPlacement?savedPlacement.ShowCmd:-1)+" "+matchSummary); }
    RECT initialBounds,initialClient;uint initialDpi;bool known,maximized,touches;string mode;
    if(GetOverlayBounds(out initialBounds,out initialClient,out initialDpi,out known,out maximized,out touches,out mode))PlaceOverlay(initialBounds,initialDpi);
