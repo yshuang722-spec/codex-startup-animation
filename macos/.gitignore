@@ -1,0 +1,7 @@
+dist/
+previews/
+test-results/
+Resources/Launcher.icns
+__pycache__/
+*.pyc
+.DS_Store
